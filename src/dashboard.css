@@ -2187,11 +2187,14 @@ body {
    3) Emergency CTA remains fully visible
    ========================================================= */
 
-/* Side panel itself is the clipping frame for the animation. */
+/* Side panel itself used to be a clipping frame for the empty-state
+   animation, but that also clipped real place details (cut-off text,
+   no scrolling to reach lower buttons like "Request Improvement").
+   The animation is already contained by .aa-empty-panel-visual's own
+   overflow:hidden below, so the panel/aside just need to scroll normally. */
 #root .aa-dashboard .aa-side-panel-shell {
   position: relative !important;
   min-width: 0 !important;
-  overflow: hidden !important;
 }
 
 #root .aa-dashboard .aa-side-panel-shell > aside {
@@ -2200,7 +2203,8 @@ body {
   min-width: 0 !important;
   height: 100% !important;
   min-height: 520px !important;
-  overflow: hidden !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
   isolation: isolate !important;
 }
 
@@ -3310,4 +3314,9 @@ body {
 #root .aa-dashboard .aa-tag-place-fixed:hover { transform: translateY(-2px) !important; }
 #root .aa-dashboard .aa-tagging-overlay { position: fixed !important; inset: 0 !important; z-index: 1000000 !important; pointer-events: auto !important; }
 #root .aa-dashboard .aa-tagging-modal { position: relative !important; z-index: 1000001 !important; pointer-events: auto !important; }
+/* Without this, the blanket "> *" rule above forces these modals to
+   position: relative, so they render inline in the scrollable panel
+   instead of popping up as a centered overlay. */
+#root .aa-dashboard .aa-verify-overlay,
+#root .aa-dashboard .aa-business-overlay { position: fixed !important; inset: 0 !important; z-index: 1000000 !important; pointer-events: auto !important; }
 @media (max-width:700px){ #root .aa-dashboard .aa-tag-place-fixed{left:14px !important;bottom:14px !important;} }

@@ -78,6 +78,84 @@ const DEVICE_ID = (() => {
   return id;
 })();
 
+// How many distinct signed-in accounts must independently confirm a place
+// before it flips to "Verified". One tap from one account is no longer
+// enough — this is what makes the badge mean something.
+const VERIFICATION_THRESHOLD = 2;
+
+// A photo, when attached, is stored downscaled to keep each row small.
+// For a production deployment this should move to Supabase Storage
+// (upload the file, store only the resulting URL) instead of embedding
+// base64 in the table — this inline approach is a pragmatic prototype
+// stand-in that needs no storage bucket / CORS setup to demo.
+const MAX_PHOTO_DIMENSION = 640;
+const PHOTO_JPEG_QUALITY = 0.6;
+
+async function compressPhotoFile(file) {
+  if (!file) return null;
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+  const img = await new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Could not read image"));
+    image.src = dataUrl;
+  });
+  const scale = Math.min(1, MAX_PHOTO_DIMENSION / Math.max(img.width, img.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", PHOTO_JPEG_QUALITY);
+}
+
+// ---------------------------------------------------------------------------
+// Offline map pack — a fixed bounding box over central Vijayawada.
+// IMPORTANT: raw tile.openstreetmap.org servers explicitly prohibit heavy /
+// bulk automated downloading (see their tile usage policy). This pack is
+// deliberately small (~150 tiles, zoom 13-15, one-time, user-initiated) and
+// throttled to stay well inside "light use". For a production app that
+// really needs offline map packs, switch the TileLayer to a provider whose
+// terms allow caching for offline use (e.g. MapTiler, Stadia Maps,
+// Thunderforest) instead of scaling this approach up.
+// ---------------------------------------------------------------------------
+const OFFLINE_BBOX = { latMin: 16.47, latMax: 16.56, lngMin: 80.58, lngMax: 80.70 };
+const OFFLINE_ZOOMS = [13, 14, 15];
+const OFFLINE_TILE_CACHE = "aa-osm-tiles"; // matches vite.config.js runtimeCaching cacheName
+const OFFLINE_BATCH_SIZE = 6;
+const OFFLINE_BATCH_DELAY_MS = 180;
+
+function lonToTileX(lon, z) {
+  return Math.floor(((lon + 180) / 360) * 2 ** z);
+}
+function latToTileY(lat, z) {
+  const rad = (lat * Math.PI) / 180;
+  return Math.floor(
+    ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * 2 ** z
+  );
+}
+
+function buildOfflineTileList() {
+  const urls = [];
+  for (const z of OFFLINE_ZOOMS) {
+    const x1 = lonToTileX(OFFLINE_BBOX.lngMin, z);
+    const x2 = lonToTileX(OFFLINE_BBOX.lngMax, z);
+    const y1 = latToTileY(OFFLINE_BBOX.latMax, z);
+    const y2 = latToTileY(OFFLINE_BBOX.latMin, z);
+    for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) {
+      for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y++) {
+        urls.push(`https://a.tile.openstreetmap.org/${z}/${x}/${y}.png`);
+      }
+    }
+  }
+  return urls;
+}
+
 function personalizedScore(place, requirementId) {
   const req = REQUIREMENTS.find((r) => r.id === requirementId);
   if (!req) return scoreForFeatures(place.features);
@@ -96,12 +174,12 @@ function formatVerified(date) {
 
 
 const SEED_PLACES = [
-  { id: "p1", name: "Kanaka Durga Temple Approach", lat: 16.5193, lng: 80.6132, features: ["ramp", "elevator", "restroom"], verified: true, verifiedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: "p2", name: "Benz Circle Metro Stop", lat: 16.5062, lng: 80.648, features: ["ramp", "tactile"], verified: true, verifiedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: "p3", name: "PVP Square Mall", lat: 16.5, lng: 80.6425, features: ["ramp", "doorway", "restroom", "elevator", "parking"], verified: true, verifiedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: "p4", name: "Governorpet Bus Stand", lat: 16.5158, lng: 80.6203, features: ["parking"], verified: false, verifiedAt: null, updatedAt: new Date().toISOString() },
-  { id: "p5", name: "SRR & CVR College Gate", lat: 16.5348, lng: 80.6089, features: ["doorway"], verified: false, verifiedAt: null, updatedAt: new Date().toISOString() },
-  { id: "p6", name: "One Town Market Lane", lat: 16.5104, lng: 80.6151, features: [], verified: false, verifiedAt: null, updatedAt: new Date().toISOString() },
+  { id: "p1", name: "Kanaka Durga Temple Approach", lat: 16.5193, lng: 80.6132, features: ["ramp", "elevator", "restroom"], verified: true, verifiedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), verifications: [], businessEmail: null, requestedBy: [] },
+  { id: "p2", name: "Benz Circle Metro Stop", lat: 16.5062, lng: 80.648, features: ["ramp", "tactile"], verified: true, verifiedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), verifications: [], businessEmail: null, requestedBy: [] },
+  { id: "p3", name: "PVP Square Mall", lat: 16.5, lng: 80.6425, features: ["ramp", "doorway", "restroom", "elevator", "parking"], verified: true, verifiedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), verifications: [], businessEmail: null, requestedBy: [] },
+  { id: "p4", name: "Governorpet Bus Stand", lat: 16.5158, lng: 80.6203, features: ["parking"], verified: false, verifiedAt: null, updatedAt: new Date().toISOString(), verifications: [], businessEmail: null, requestedBy: [] },
+  { id: "p5", name: "SRR & CVR College Gate", lat: 16.5348, lng: 80.6089, features: ["doorway"], verified: false, verifiedAt: null, updatedAt: new Date().toISOString(), verifications: [], businessEmail: null, requestedBy: [] },
+  { id: "p6", name: "One Town Market Lane", lat: 16.5104, lng: 80.6151, features: [], verified: false, verifiedAt: null, updatedAt: new Date().toISOString(), verifications: [], businessEmail: null, requestedBy: [] },
 ];
 
 const BARRIER_DURATION_MS = 24 * 60 * 60 * 1000; // 24h
@@ -237,7 +315,15 @@ function FlyTo({ target }) {
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
-export default function AccessAssistApp({ onSignOut }) {
+export default function AccessAssistApp({ user, onSignOut }) {
+  // Real, signed-in identity when available (this app requires login — see
+  // App.jsx) — falls back to the anonymous per-browser DEVICE_ID only if
+  // Supabase isn't configured at all. Tying confirmations to an account
+  // instead of a device ID means clearing browser storage can't manufacture
+  // fresh "independent" confirmations.
+  const userId = user?.id || DEVICE_ID;
+  const userEmail = user?.email || null;
+
   const [places, setPlaces] = useState(SEED_PLACES);
   const [requirement, setRequirement] = useState("wheelchair");
   const [profileOpen, setProfileOpen] = useState(false);
@@ -253,13 +339,24 @@ export default function AccessAssistApp({ onSignOut }) {
   const [barrierReportOpen, setBarrierReportOpen] = useState(false);
   const [localBarrierIssues, setLocalBarrierIssues] = useState({});
 
+  const [verifyModalOpen, setVerifyModalOpen] = useState(false);
+  const [verifyError, setVerifyError] = useState("");
+  const [businessModalOpen, setBusinessModalOpen] = useState(false);
+  const [offlineError, setOfflineError] = useState("");
+
   const [searchText, setSearchText] = useState("");
   const [searchStatus, setSearchStatus] = useState("idle"); // idle | loading | error
   const [unratedResult, setUnratedResult] = useState(null); // {name, lat, lng} — found via search, not yet tagged
 
   const [fastForward, setFastForward] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
-  const [offlineState, setOfflineState] = useState("idle"); // idle | downloading | ready
+  const [offlineState, setOfflineState] = useState(() => {
+    try {
+      return localStorage.getItem("accessassist_offline_pack") ? "ready" : "idle";
+    } catch {
+      return "idle";
+    }
+  }); // idle | downloading | ready
   const [offlineProgress, setOfflineProgress] = useState(0);
 
   const [virtualNow, setVirtualNow] = useState(() => Date.now());
@@ -309,17 +406,27 @@ export default function AccessAssistApp({ onSignOut }) {
         const { data, error } = await supabase.from("places").select("*").order("created_at", { ascending: true });
         if (error) throw error;
         if (data?.length) {
-          setPlaces(data.map((p) => ({ ...p, features: p.features || [], barrier: p.barrier || null, verifiedAt: p.verified_at || null, requestCount: p.request_count || 0, updatedAt: p.updated_at || p.verified_at || null })));
+          setPlaces(data.map((p) => ({
+            ...p,
+            features: p.features || [],
+            barrier: p.barrier || null,
+            verifiedAt: p.verified_at || null,
+            requestCount: p.request_count || 0,
+            updatedAt: p.updated_at || p.verified_at || null,
+            verifications: p.verifications || [],
+            businessEmail: p.business_email || null,
+            requestedBy: p.requested_by || [],
+          })));
         } else {
           for (const p of SEED_PLACES) await supabase.from("places").upsert({ id: p.id, name: p.name, lat: p.lat, lng: p.lng, features: p.features, verified: !!p.verified, verified_at: p.verifiedAt || null, barrier: p.barrier || null, request_count: 0, updated_at: p.updatedAt || new Date().toISOString() });
         }
         setDbStatus("connected");
-        const { data: c } = await supabase.from("contributors").select("*").eq("device_id", DEVICE_ID).maybeSingle();
+        const { data: c } = await supabase.from("contributors").select("*").eq("device_id", userId).maybeSingle();
         if (c) setContributor({ points: c.points || 0, tagged: c.tagged || 0, barriers: c.barriers || 0, confirmed: c.confirmed || 0 });
       } catch { setDbStatus("local"); }
     };
     loadData();
-  }, []);
+  }, [userId]);
 
   const persistPlace = async (place) => {
     const cached = localStorage.getItem("accessassist_places");
@@ -331,17 +438,32 @@ export default function AccessAssistApp({ onSignOut }) {
     const nextPlaces = exists ? current.map((p) => p.id === place.id ? place : p) : [...current, place];
     localStorage.setItem("accessassist_places", JSON.stringify(nextPlaces));
     if (!supabase) return;
-    await supabase.from("places").upsert({
-      id: place.id, name: place.name, lat: place.lat, lng: place.lng, features: place.features,
-      verified: !!place.verified, verified_at: place.verifiedAt || null, barrier: place.barrier || null,
-      request_count: place.requestCount || 0, updated_at: place.updatedAt || new Date().toISOString()
-    });
+    try {
+      await supabase.from("places").upsert({
+        id: place.id, name: place.name, lat: place.lat, lng: place.lng, features: place.features,
+        verified: !!place.verified, verified_at: place.verifiedAt || null, barrier: place.barrier || null,
+        request_count: place.requestCount || 0, updated_at: place.updatedAt || new Date().toISOString(),
+        verifications: place.verifications || [], business_email: place.businessEmail || null,
+        requested_by: place.requestedBy || [],
+      });
+    } catch (err) {
+      // Most likely cause: the verifications / business_email / requested_by
+      // columns haven't been added to the places table yet (see README).
+      // The change still lives in local state + localStorage either way.
+      console.warn("Supabase sync skipped (place):", err?.message || err);
+    }
   };
 
   const updateContributor = async (delta) => {
     const next = { points: contributor.points + (delta.points || 0), tagged: contributor.tagged + (delta.tagged || 0), barriers: contributor.barriers + (delta.barriers || 0), confirmed: contributor.confirmed + (delta.confirmed || 0) };
     setContributor(next);
-    if (supabase) await supabase.from("contributors").upsert({ device_id: DEVICE_ID, ...next });
+    if (supabase) {
+      try {
+        await supabase.from("contributors").upsert({ device_id: userId, email: userEmail, ...next });
+      } catch (err) {
+        console.warn("Supabase sync skipped (contributor):", err?.message || err);
+      }
+    }
   };
 
   const selectPlace = useCallback(
@@ -420,21 +542,83 @@ export default function AccessAssistApp({ onSignOut }) {
     }
   };
 
+  // Opens the "Verify this place" modal instead of instantly flipping the
+  // badge. A single tap is not evidence — see submitVerification below.
   const handleVerifyPlace = () => {
     if (!selectedPlace || selectedPlace.verified) return;
-    const updated = { ...selectedPlace, verified: true, verifiedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-    setPlaces((prev) => prev.map((p) => p.id === updated.id ? updated : p));
-    persistPlace(updated);
-    updateContributor({ points: 5, confirmed: 1 });
+    setVerifyError("");
+    setVerifyModalOpen(true);
   };
 
-
-  const requestImprovement = async () => {
+  // Real corroboration: each signed-in account can confirm a place at most
+  // once. A place only earns the "Verified" badge once VERIFICATION_THRESHOLD
+  // distinct accounts have confirmed it — a photo is optional but strongly
+  // encouraged, and is shown to the next person considering confirming.
+  const submitVerification = async ({ photo, note }) => {
     if (!selectedPlace) return;
-    const updated = { ...selectedPlace, requestCount: (selectedPlace.requestCount || 0) + 1, updatedAt: new Date().toISOString() };
-    setPlaces((prev) => prev.map((p) => p.id === updated.id ? updated : p));
+    const existing = selectedPlace.verifications || [];
+    if (existing.some((v) => v.userId === userId)) {
+      setVerifyError("You've already confirmed this place — thanks for double-checking though!");
+      return;
+    }
+    const entry = { userId, email: userEmail, at: new Date().toISOString(), hasPhoto: !!photo, photo: photo || null, note: note || "" };
+    const nextVerifications = [...existing, entry];
+    const nowVerified = selectedPlace.verified || nextVerifications.length >= VERIFICATION_THRESHOLD;
+    const updated = {
+      ...selectedPlace,
+      verifications: nextVerifications,
+      verified: nowVerified,
+      verifiedAt: nowVerified && !selectedPlace.verified ? new Date().toISOString() : selectedPlace.verifiedAt,
+      updatedAt: new Date().toISOString(),
+    };
+    setPlaces((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    persistPlace(updated);
+    updateContributor({ points: 5, confirmed: 1 });
+    setVerifyModalOpen(false);
+    setVerifyError("");
+  };
+
+  // Opens the business-request modal — see submitBusinessRequest for what
+  // actually happens when the user sends it (mailto:, since a browser app
+  // can't send email on its own — see README).
+  const requestImprovement = () => {
+    if (!selectedPlace) return;
+    setBusinessModalOpen(true);
+  };
+
+  const submitBusinessRequest = async ({ email, message }) => {
+    if (!selectedPlace) return;
+    const alreadyRequested = (selectedPlace.requestedBy || []).includes(userId);
+    const updated = {
+      ...selectedPlace,
+      businessEmail: email || selectedPlace.businessEmail || null,
+      requestCount: alreadyRequested ? (selectedPlace.requestCount || 0) : (selectedPlace.requestCount || 0) + 1,
+      requestedBy: alreadyRequested ? (selectedPlace.requestedBy || []) : [...(selectedPlace.requestedBy || []), userId],
+      updatedAt: new Date().toISOString(),
+    };
+    setPlaces((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    persistPlace(updated);
     setBusinessRequest(true);
-    if (supabase) await supabase.from("places").upsert({ id: updated.id, name: updated.name, lat: updated.lat, lng: updated.lng, features: updated.features, verified: !!updated.verified, verified_at: updated.verifiedAt || null, barrier: updated.barrier || null, request_count: updated.requestCount || 0, updated_at: updated.updatedAt || new Date().toISOString() });
+    setBusinessModalOpen(false);
+
+    const missing = FEATURE_LIBRARY.filter((f) => !selectedPlace.features.includes(f.id)).map((f) => f.label);
+    const activeBarriers = getBarrierIssuesForPlace(selectedPlace).map((id) => BARRIER_LIBRARY.find((b) => b.id === id)?.label).filter(Boolean);
+    const subject = `Accessibility improvement request — ${selectedPlace.name}`;
+    const bodyLines = [
+      `Hi,`,
+      ``,
+      `A visitor using AccessAssist (a community accessibility map) flagged ${selectedPlace.name} for accessibility improvements.`,
+      ``,
+      missing.length ? `Currently missing:\n- ${missing.join("\n- ")}` : `No specific missing features tagged.`,
+      activeBarriers.length ? `\nActive barrier reports:\n- ${activeBarriers.join("\n- ")}` : ``,
+      message ? `\nMessage from the requester:\n${message}` : ``,
+      ``,
+      `This has now been requested by ${updated.requestCount} user${updated.requestCount === 1 ? "" : "s"} on AccessAssist.`,
+      `— Sent via AccessAssist`,
+    ].filter(Boolean);
+    const body = bodyLines.join("\n");
+    const mailto = `mailto:${encodeURIComponent(email || "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailto;
   };
 
   const toggleDraftFeature = (id) => {
@@ -464,6 +648,7 @@ export default function AccessAssistApp({ onSignOut }) {
         features: draftFeatures,
         verified: false,
         barrier: null, verifiedAt: null, requestCount: 0, updatedAt: new Date().toISOString(),
+        verifications: [], businessEmail: null, requestedBy: [],
       };
       setPlaces((prev) => [...prev, newPlace]);
       persistPlace(newPlace);
@@ -491,6 +676,7 @@ export default function AccessAssistApp({ onSignOut }) {
       features: draftFeatures,
       verified: false,
       barrier: null, verifiedAt: null, requestCount: 0, updatedAt: new Date().toISOString(),
+      verifications: [], businessEmail: null, requestedBy: [],
     };
     setPlaces((prev) => [...prev, newPlace]);
     persistPlace(newPlace);
@@ -529,26 +715,55 @@ export default function AccessAssistApp({ onSignOut }) {
     }
   };
 
-  const startOfflineDownload = () => {
+  // Real offline pack download: actually fetches every tile in the
+  // Vijayawada bounding box (see OFFLINE_BBOX/OFFLINE_ZOOMS above) and stores
+  // each one in the Cache Storage entry the service worker also uses for
+  // tiles, in small throttled batches. Place/rating data doesn't need this
+  // step — it's already kept in localStorage and survives offline on its
+  // own — this only covers map imagery, which the browser has no built-in
+  // caching for.
+  const startOfflineDownload = async () => {
+    setOfflineError("");
+    if (!("caches" in window)) {
+      setOfflineError("This browser doesn't support offline caching.");
+      return;
+    }
     setOfflineState("downloading");
     setOfflineProgress(0);
-  };
 
-  useEffect(() => {
-    if (offlineState !== "downloading") return;
-    const interval = setInterval(() => {
-      setOfflineProgress((prev) => {
-        const next = prev + 12;
-        if (next >= 100) {
-          clearInterval(interval);
-          setOfflineState("ready");
-          return 100;
-        }
-        return next;
-      });
-    }, 150);
-    return () => clearInterval(interval);
-  }, [offlineState]);
+    const tileUrls = buildOfflineTileList();
+    const cache = await caches.open(OFFLINE_TILE_CACHE);
+    let done = 0;
+    let failed = 0;
+
+    for (let i = 0; i < tileUrls.length; i += OFFLINE_BATCH_SIZE) {
+      const batch = tileUrls.slice(i, i + OFFLINE_BATCH_SIZE);
+      await Promise.all(
+        batch.map(async (url) => {
+          try {
+            const existing = await cache.match(url);
+            if (!existing) {
+              const response = await fetch(url, { mode: "cors" }).catch(() => fetch(url, { mode: "no-cors" }));
+              await cache.put(url, response);
+            }
+          } catch {
+            failed += 1;
+          } finally {
+            done += 1;
+          }
+        })
+      );
+      setOfflineProgress(Math.round((done / tileUrls.length) * 100));
+      // Small pause between batches — a deliberate throttle so this stays
+      // "light use" against OSM's tile servers rather than a burst download.
+      await new Promise((r) => setTimeout(r, OFFLINE_BATCH_DELAY_MS));
+    }
+
+    localStorage.setItem("accessassist_offline_pack", JSON.stringify({ downloadedAt: new Date().toISOString(), tiles: tileUrls.length, failed }));
+    setOfflineProgress(100);
+    setOfflineState("ready");
+    if (failed > 0) setOfflineError(`${failed} of ${tileUrls.length} tiles couldn't be cached (you may be offline right now, or rate-limited) — the rest are saved.`);
+  };
 
   const draftScore = scoreForFeatures(draftFeatures);
 
@@ -617,7 +832,7 @@ export default function AccessAssistApp({ onSignOut }) {
           <button type="button" className="aa-hero-button" style={styles.toggle} onClick={() => setProfileOpen(true)} aria-haspopup="dialog" aria-label="Open Accessibility Hero">👤 Accessibility Hero</button>
           <ToggleButton label="Demo Fast-Forward" active={fastForward} onClick={() => setFastForward((v) => !v)} />
           <ToggleButton label="Voice-Guided Mode" active={voiceMode} onClick={() => setVoiceMode((v) => !v)} />
-          <OfflineControl state={offlineState} progress={offlineProgress} onStart={startOfflineDownload} />
+          <OfflineControl state={offlineState} progress={offlineProgress} error={offlineError} onStart={startOfflineDownload} />
           {onSignOut && (
             <button className="aa-signout-inside" onClick={onSignOut} title="Sign out">
               ↪ Sign Out
@@ -738,6 +953,7 @@ export default function AccessAssistApp({ onSignOut }) {
           onRequestImprovement={requestImprovement}
           onVerifyPlace={handleVerifyPlace}
           onSpeak={handleSpeakerClick}
+          userId={userId}
         />
         </div>
       </div>
@@ -823,6 +1039,23 @@ export default function AccessAssistApp({ onSignOut }) {
           onConfirm={confirmTaggingAndPlace}
         />
       )}
+
+      {verifyModalOpen && selectedPlace && (
+        <VerifyModal
+          place={selectedPlace}
+          error={verifyError}
+          onCancel={() => { setVerifyModalOpen(false); setVerifyError(""); }}
+          onSubmit={submitVerification}
+        />
+      )}
+
+      {businessModalOpen && selectedPlace && (
+        <BusinessRequestModal
+          place={selectedPlace}
+          onCancel={() => setBusinessModalOpen(false)}
+          onSubmit={submitBusinessRequest}
+        />
+      )}
     </div>
   );
 }
@@ -846,10 +1079,10 @@ function ToggleButton({ label, active, onClick }) {
   );
 }
 
-function OfflineControl({ state, progress, onStart }) {
+function OfflineControl({ state, progress, error, onStart }) {
   if (state === "idle") {
     return (
-      <button style={styles.toggle} onClick={onStart}>
+      <button style={styles.toggle} onClick={onStart} title="Downloads map tiles for central Vijayawada so the map works with no internet">
         Enable Offline Mode
       </button>
     );
@@ -865,13 +1098,20 @@ function OfflineControl({ state, progress, onStart }) {
     );
   }
   return (
-    <div style={{ ...styles.toggle, background: COLORS.good, color: "#0c2018", borderColor: COLORS.good, cursor: "default" }}>
-      Offline: Vijayawada Pack Downloaded
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+      <button
+        style={{ ...styles.toggle, background: COLORS.good, color: "#0c2018", borderColor: COLORS.good }}
+        onClick={onStart}
+        title="Click to re-download the offline pack"
+      >
+        ✓ Offline: Vijayawada Pack Ready
+      </button>
+      {error && <span style={{ fontSize: 10, color: COLORS.mid, maxWidth: 220, textAlign: "right" }}>{error}</span>}
     </div>
   );
 }
 
-function SidePanel({ place, virtualNow, requirement, onReportBarrier, barrierIssues, onToggleBarrierIssue, onFixBarrierIssue, onRequestImprovement, onVerifyPlace, onSpeak }) {
+function SidePanel({ place, virtualNow, requirement, onReportBarrier, barrierIssues, onToggleBarrierIssue, onFixBarrierIssue, onRequestImprovement, onVerifyPlace, onSpeak, userId }) {
   if (!place) {
     return (
       <aside style={{ ...styles.panel, position: "relative", overflow: "hidden" }}>
@@ -927,10 +1167,11 @@ function SidePanel({ place, virtualNow, requirement, onReportBarrier, barrierIss
         <div style={styles.verifyBox}>
           <div style={{ fontWeight: 700, color: COLORS.mid }}>🟡 Community data — not yet verified</div>
           <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 4 }}>
-            Help confirm this location's accessibility information.
+            {(place.verifications?.length || 0)} of {VERIFICATION_THRESHOLD} independent confirmations so far.
+            {place.verifications?.some((v) => v.hasPhoto) ? " Includes photo evidence." : " Help confirm this location's accessibility information."}
           </div>
           <button style={styles.verifyButton} onClick={onVerifyPlace}>
-            ✓ Verify this place
+            ✓ Confirm this place
           </button>
         </div>
       )}
@@ -995,7 +1236,7 @@ function SidePanel({ place, virtualNow, requirement, onReportBarrier, barrierIss
           Missing improvements? {place.requestCount || 0} users have requested better accessibility.
         </div>
         <button style={styles.primaryButton} onClick={onRequestImprovement}>
-          {place.requestCount ? "Request sent ✓" : "Request Improvement"}
+          {(place.requestedBy || []).includes(userId) ? "Send another request" : "Request Improvement"}
         </button>
       </div>
     </aside>
@@ -1293,6 +1534,165 @@ function TaggingModal({ draftFeatures, draftScore, onToggle, onCancel, onConfirm
           </button>
           <button style={styles.primaryButton} onClick={onConfirm}>
             Place pin on map
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VerifyModal({ place, error, onCancel, onSubmit }) {
+  const [photoPreview, setPhotoPreview] = useState(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState("");
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLocalError("");
+    try {
+      const compressed = await compressPhotoFile(file);
+      setPhotoPreview(compressed);
+    } catch {
+      setLocalError("Couldn't read that photo — try a different file.");
+    }
+  };
+
+  const submit = async () => {
+    setBusy(true);
+    await onSubmit({ photo: photoPreview, note });
+    setBusy(false);
+  };
+
+  const priorConfirmations = place.verifications || [];
+
+  return (
+    <div className="aa-verify-overlay" style={{ ...styles.modalOverlay, zIndex: 1000000 }} onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
+      <div style={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: 0, color: COLORS.text }}>Confirm accessibility at {place.name}</h3>
+        <p style={{ color: COLORS.textDim, fontSize: 13, marginTop: 6 }}>
+          {priorConfirmations.length} of {VERIFICATION_THRESHOLD} confirmations so far. A photo isn't required, but it
+          helps the next person trust the report — and helps moderators spot bad-faith submissions.
+        </p>
+
+        {priorConfirmations.length > 0 && (
+          <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 4, marginBottom: 10 }}>
+            Already confirmed by {priorConfirmations.length} other account{priorConfirmations.length === 1 ? "" : "s"}
+            {priorConfirmations.some((v) => v.hasPhoto) ? ", including photo evidence." : "."}
+          </div>
+        )}
+
+        <label style={{ display: "block", fontSize: 13, color: COLORS.text, marginTop: 8 }}>
+          Add a photo (optional but recommended)
+          <input type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: "block", marginTop: 6, fontSize: 12, color: COLORS.textDim }} />
+        </label>
+        {photoPreview && (
+          <img src={photoPreview} alt="Verification evidence preview" style={{ marginTop: 10, maxWidth: "100%", borderRadius: 8, border: `1px solid ${COLORS.panelBorder}` }} />
+        )}
+
+        <label style={{ display: "block", fontSize: 13, color: COLORS.text, marginTop: 14 }}>
+          Note (optional)
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. Ramp was clear and usable as of today"
+            rows={2}
+            style={{ width: "100%", marginTop: 6, padding: 8, borderRadius: 8, border: `1px solid ${COLORS.panelBorder}`, background: COLORS.chip, color: COLORS.text, fontSize: 13, resize: "vertical", boxSizing: "border-box" }}
+          />
+        </label>
+
+        {(localError || error) && <div style={{ color: COLORS.bad, fontSize: 12, marginTop: 10 }}>{localError || error}</div>}
+
+        <div style={styles.modalActions}>
+          <button style={styles.secondaryButton} onClick={onCancel}>Cancel</button>
+          <button style={styles.primaryButton} onClick={submit} disabled={busy}>
+            {busy ? "Submitting…" : "Submit confirmation"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BusinessRequestModal({ place, onCancel, onSubmit }) {
+  const [email, setEmail] = useState(place.businessEmail || "");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const missing = FEATURE_LIBRARY.filter((f) => !place.features.includes(f.id)).map((f) => f.label);
+
+  const buildBody = () => {
+    const lines = [
+      `Hi,`,
+      ``,
+      `A visitor using AccessAssist flagged ${place.name} for accessibility improvements.`,
+      ``,
+      missing.length ? `Currently missing:\n- ${missing.join("\n- ")}` : `No specific missing features tagged.`,
+      message ? `\nMessage from the requester:\n${message}` : ``,
+      ``,
+      `— Sent via AccessAssist`,
+    ].filter(Boolean);
+    return lines.join("\n");
+  };
+
+  const copyText = async () => {
+    try {
+      await navigator.clipboard.writeText(`Subject: Accessibility improvement request — ${place.name}\n\n${buildBody()}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  const submit = async () => {
+    setBusy(true);
+    await onSubmit({ email: email.trim(), message: message.trim() });
+    setBusy(false);
+  };
+
+  return (
+    <div className="aa-business-overlay" style={{ ...styles.modalOverlay, zIndex: 1000000 }} onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
+      <div style={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: 0, color: COLORS.text }}>Request improvement at {place.name}</h3>
+        <p style={{ color: COLORS.textDim, fontSize: 13, marginTop: 6 }}>
+          This opens your email app with a pre-filled message — AccessAssist doesn't send email on its own.
+          If you know the business's contact email, add it below so it's remembered for next time.
+        </p>
+
+        <label style={{ display: "block", fontSize: 13, color: COLORS.text, marginTop: 10 }}>
+          Business email (optional)
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="owner@business.com"
+            style={{ width: "100%", marginTop: 6, padding: 8, borderRadius: 8, border: `1px solid ${COLORS.panelBorder}`, background: COLORS.chip, color: COLORS.text, fontSize: 13, boxSizing: "border-box" }}
+          />
+        </label>
+
+        <label style={{ display: "block", fontSize: 13, color: COLORS.text, marginTop: 12 }}>
+          Add a message (optional)
+          <textarea
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            rows={3}
+            placeholder="Anything specific you'd like them to know"
+            style={{ width: "100%", marginTop: 6, padding: 8, borderRadius: 8, border: `1px solid ${COLORS.panelBorder}`, background: COLORS.chip, color: COLORS.text, fontSize: 13, resize: "vertical", boxSizing: "border-box" }}
+          />
+        </label>
+
+        <div style={{ fontSize: 11, color: COLORS.textDim, marginTop: 10 }}>
+          No email app configured, or on a shared computer? Use "Copy request text" and paste it wherever you'll actually send it.
+        </div>
+
+        <div style={styles.modalActions}>
+          <button style={styles.secondaryButton} onClick={copyText}>{copied ? "Copied ✓" : "Copy request text"}</button>
+          <button style={styles.secondaryButton} onClick={onCancel}>Cancel</button>
+          <button style={styles.primaryButton} onClick={submit} disabled={busy}>
+            {busy ? "Opening…" : "Send via email"}
           </button>
         </div>
       </div>
