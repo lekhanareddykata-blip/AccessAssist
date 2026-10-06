@@ -55,3 +55,14 @@ Supabase
   ├── Authentication
   ├── User Profiles
   └── Accessibility Data
+
+## Screenshots
+
+### Accessibility Map
+![AccessAssist Map](Score)
+
+### Report a Barrier
+![Report a Barrier](Report%20a%20barrier)
+
+### Login
+![AccessAssist Login](Login%20Page)
