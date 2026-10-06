@@ -1,20 +1,57 @@
-<<<<<<< HEAD
 # AccessAssist
-=======
-# React + Vite
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A community-driven accessibility mapping platform that helps users discover, evaluate, and contribute accessibility information for locations in Vijayawada.
 
-Currently, two official plugins are available:
+## Live Demo
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+[AccessAssist](https://accessassist.vercel.app/)
 
-## React Compiler
+## About the Project
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+AccessAssist is a web application designed to help users find places based on their individual accessibility requirements.
 
-## Expanding the Oxlint configuration
+Users can explore locations on an interactive map, view accessibility information, report accessibility barriers, add new locations, and contribute verification data to improve the reliability of accessibility information.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
->>>>>>> 4676267 (Intial Adding)
+The application provides personalized accessibility scoring for different requirements including wheelchair access, walking assistance, low vision, stroller access, and elderly-friendly facilities.
+
+## Key Features
+
+- Interactive map using Leaflet.js and OpenStreetMap
+- Location search and discovery
+- Personalized accessibility scoring
+- Accessibility feature tagging
+- Accessibility barrier reporting
+- Community-based location verification
+- User registration and authentication
+- Separate user and admin access
+- Admin dashboard for reviewing locations and accessibility barriers
+- Photo and note support for accessibility verification
+- Offline map tile caching
+- Password reset functionality
+- Accessibility-focused location information
+
+## Technologies Used
+
+- React.js
+- JavaScript
+- Vite
+- Supabase
+- Leaflet.js
+- React Leaflet
+- OpenStreetMap
+- HTML5
+- CSS3
+
+## Application Architecture
+
+```text
+User
+  ↓
+React.js Frontend
+  ↓
+Leaflet.js + OpenStreetMap
+  ↓
+Supabase
+  ├── Authentication
+  ├── User Profiles
+  └── Accessibility Data
